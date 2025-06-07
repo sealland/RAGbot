@@ -37,13 +37,16 @@ def main():
 
     print(f"โหลดเอกสาร PDF สำเร็จ จำนวน {len(documents)} ไฟล์")
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1500,  # <--- ลองเพิ่มขนาด chunk
+        chunk_overlap=200  # <--- เพิ่มส่วนที่ทับซ้อนกันตามไปด้วย
+    )
     docs = text_splitter.split_documents(documents)
     print(f"แบ่งเอกสารออกเป็น {len(docs)} ส่วน (chunks)")
 
     print("กำลังโหลด Embedding model...")
     # --- แก้ไข 2 ---
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
     print("โหลด Embedding model สำเร็จ")
 
     print("กำลังสร้าง Vector Store และจัดเก็บข้อมูล...")
