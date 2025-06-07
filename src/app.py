@@ -1,4 +1,4 @@
-# src/app.py (Final Correct Version)
+# src/app.py (Final Correct Version with Source Citation)
 
 import os
 import streamlit as st
@@ -6,9 +6,9 @@ from dotenv import load_dotenv
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel  # ### <<< แก้ไขตรงนี้ 1: Import เพิ่ม
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_huggingface import HuggingFaceEmbeddings  # <--- แก้ไข 1
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_postgres.vectorstores import PGVector
 
 # --- 1. โหลด Environment Variables และตั้งค่าพื้นฐาน ---
@@ -41,55 +41,73 @@ Answer:
 """
 prompt = ChatPromptTemplate.from_template(template)
 
+
 # --- 3. ฟังก์ชันสำหรับโหลดโมเดลและ Retriever (ใช้ Cache เพื่อประสิทธิภาพ) ---
 @st.cache_resource
 def get_llm():
     """โหลดโมเดลภาษาจาก Google Gemini"""
-    return ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", temperature=0.1 ,max_output_tokens=8192 )
+    return ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", temperature=0.1, max_output_tokens=8192)
+
 
 @st.cache_resource
 def get_retriever():
     """สร้าง Retriever เพื่อเชื่อมต่อและค้นหาข้อมูลจาก PGVector"""
-    # --- แก้ไข 2 ---
     embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
-
-    # สร้างการเชื่อมต่อไปยัง Vector Store ที่มีข้อมูลอยู่แล้ว
-    # --- แก้ไข 3 (ใช้ 'embedding' และ 'connection') ---
     db = PGVector(
-        embeddings=embeddings,  # <--- **แก้ไขเป็น `embeddings` (มี s)**
+        embeddings=embeddings,
         collection_name=COLLECTION_NAME,
         connection=CONNECTION_STRING,
     )
-    # สร้าง Retriever พื้นฐานก่อน
-    base_retriever = db.as_retriever(search_kwargs={'k': 3})  # k ที่นี่อาจไม่ต้องเยอะมาก
-
-    # ห่อด้วย MultiQueryRetriever
-    # มันจะใช้ llm ที่เรามี (Gemini) เพื่อช่วยแตกคำถาม
-    llm = get_llm()  # ดึง llm มาใช้
+    base_retriever = db.as_retriever(search_kwargs={'k': 3})
+    llm = get_llm()
     multi_query_retriever = MultiQueryRetriever.from_llm(
         retriever=base_retriever,
         llm=llm
     )
     return multi_query_retriever
 
+
 def format_docs(docs):
     """จัดรูปแบบเอกสารที่ค้นเจอให้อยู่ในรูปแบบสตริงเดียว"""
     return "\n\n".join(doc.page_content for doc in docs)
 
+
 # --- 4. สร้างหน้าเว็บด้วย Streamlit ---
-st.set_page_config(page_title="🤖 ผู้ช่วยช่างซ่อม", layout="wide", initial_sidebar_state="collapsed")
-st.title("🤖 ผู้ช่วยช่างซ่อมอัจฉริยะ")
-st.markdown("พิมพ์คำถามเกี่ยวกับปัญหาเครื่องจักร แล้วผมจะค้นหาคำตอบจากคู่มือซ่อมบำรุงให้ครับ")
+st.set_page_config(page_title="🤖 AI Chat", layout="wide", initial_sidebar_state="collapsed")
+st.title("🤖 ผู้ช่วยอัจฉริยะ")
+st.markdown("พิมพ์คำถามแล้วผมจะค้นหาคำตอบจากคู่มือให้ครับ")
 
 try:
     llm = get_llm()
     retriever = get_retriever()
-    rag_chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
+
+    # ### <<< แก้ไขตรงนี้ 2: ปรับปรุง RAG Chain ทั้งหมด ---
+    # Chain เดิม:
+    # rag_chain = (
+    #     {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    #     | prompt
+    #     | llm
+    #     | StrOutputParser()
+    # )
+
+    # Chain ใหม่ที่ส่งคืน Sources:
+    setup_and_retrieval = RunnableParallel(
+        {"context": retriever, "question": RunnablePassthrough()}
     )
+
+    rag_chain = (
+            setup_and_retrieval
+            | {
+                "answer": (
+                        RunnablePassthrough.assign(context=lambda x: format_docs(x["context"]))
+                        | prompt
+                        | llm
+                        | StrOutputParser()
+                ),
+                "sources": lambda x: x["context"]
+            }
+    )
+    # ---------------------------------------------------
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -97,16 +115,52 @@ try:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            # แสดง sources ถ้ามี
+            if "sources" in message and message["sources"]:
+                with st.expander("แหล่งข้อมูลอ้างอิง"):
+                    for source in message["sources"]:
+                        # ตรวจสอบว่า metadata และ source key มีอยู่จริง
+                        if hasattr(source, 'metadata') and 'source' in source.metadata:
+                            st.info(f"**จากไฟล์:** {os.path.basename(source.metadata['source'])}")
+                            # ตรวจสอบว่ามี page number หรือไม่
+                            if 'page' in source.metadata:
+                                st.text(f"หน้า: {source.metadata['page'] + 1}")  # Page number มักจะเริ่มที่ 0
+                            st.caption(source.page_content)
 
     if user_question := st.chat_input("เครื่องจักร XYZ มีปัญหาอะไร?"):
         st.session_state.messages.append({"role": "user", "content": user_question})
         with st.chat_message("user"):
             st.markdown(user_question)
+
         with st.chat_message("assistant"):
             with st.spinner("กำลังค้นหาข้อมูลในคู่มือและเรียบเรียงคำตอบ..."):
-                response = rag_chain.invoke(user_question)
-                st.markdown(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+                # ### <<< แก้ไขตรงนี้ 3: วิธีเรียกใช้และจัดการผลลัพธ์
+                response_data = rag_chain.invoke(user_question)
+
+                response_answer = response_data["answer"]
+                response_sources = response_data["sources"]
+
+                st.markdown(response_answer)
+
+                # แสดงแหล่งข้อมูลอ้างอิงใต้คำตอบ
+                if response_sources:
+                    with st.expander("แหล่งข้อมูลอ้างอิง"):
+                        for source in response_sources:
+                            # ตรวจสอบว่า metadata และ source key มีอยู่จริง
+                            if hasattr(source, 'metadata') and 'source' in source.metadata:
+                                st.info(f"**จากไฟล์:** {os.path.basename(source.metadata['source'])}")
+                                # ตรวจสอบว่ามี page number หรือไม่
+                                if 'page' in source.metadata:
+                                    st.text(f"หน้า: {source.metadata['page'] + 1}")  # Page number มักจะเริ่มที่ 0
+                                st.caption(source.page_content)
+
+        # ### <<< แก้ไขตรงนี้ 4: บันทึกข้อมูลทั้งหมดลง session state
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response_answer,
+            "sources": response_sources  # เก็บ sources ไว้ด้วย
+        })
+
 
 except Exception as e:
     st.error(f"เกิดข้อผิดพลาดในการเริ่มต้นระบบ: {e}")
