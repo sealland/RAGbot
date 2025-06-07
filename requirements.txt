@@ -1,0 +1,11 @@
+# requirements.txt
+
+streamlit
+langchain
+langchain-community
+langchain-google-genai
+pypdf
+# psycopg2-binary  <-- ลบหรือคอมเมนต์บรรทัดนี้
+psycopg[binary]  # <--- เพิ่มบรรทัดนี้แทน
+sentence-transformers
+python-dotenv
